@@ -15,12 +15,30 @@ from json import loads
 
 #Argument parsing stuff
 import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument('-l', '--log'      , help='output logging information for debuging purposes', action='store_true')
-parser.add_argument('-v', '--verbose'  , help='output long version of speech to text conversions', action='store_true')
-parser.add_argument('-i', '--input'    , help='set input method', choices=['-', 'arecord', 'test1'])
-parser.add_argument('-c', '--convertor', help='set raw input to flac conversion method', choices=['flac', 'sox'], default='flac')
-parser.add_argument('-o', '--output'   , help='output speech samples (to /tmp/)', action='store_true')
+parser = argparse.ArgumentParser(description='Realtime speech to text translation (and back)')
+
+parser.add_argument('-l', '--log'      , help='output logging info for debuging purposes', action='store_true')
+parser.add_argument('-v', '--verbose'  , help='output more text', action='store_true')
+
+recorderGroup = parser.add_argument_group('Recorder opions')
+recorderGroup.add_argument('-r', '--recorder', help='set recorder (input) method', choices=['-', 'arecord', 'test1'], default='arecord')
+
+convertorGroup = parser.add_argument_group('Convertor options')
+#XXX +store input somewhere
+convertorGroup.add_argument('-c', '--convertor', help='set raw input to flac conversion method', choices=['flac', 'sox'], default='flac')
+convertorGroup.add_argument('-os', '--outputsamples'   , help='output speech samples (to /tmp/)', action='store_true')
+
+sttGroup = parser.add_argument_group('Speech to text options')
+#XXX +speech to text translator (google)
+#XXX +speech to text minimal confidence (0.9 ??)
+#XXX +display repetitive unknown translations (boolean default=False)
+
+ttsGroup = parser.add_argument_group('Text to speech options')
+#XXX +text to speech translator (google)
+ttsGroup.add_argument('-tts', '--ttsconvertor', help='set text to speech method', default='google')
+ttsGroup.add_argument('-ttsv', '--ttsvoice'   , help='set voice for playback', default='en')
+ttsGroup.add_argument('-ttsp', '--ttsplay'    , help='set playback method', choices=['none', 'mplayer'], default='none')
+
 args = parser.parse_args()
 
 
@@ -112,7 +130,7 @@ convertorUsingSox = 'sox -t raw -c 1 -L -e signed -r 16k -b 16 - -t flac - gain 
 #	- let google handle translation
 #	- output translation text result
 #
-def	sample(samplesStdin, convertorStdin, convertorStdout, counter, flacTmpFilename=None):
+def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilename=None):
 
 	bytesPerSample    = 2
 	samplesPerSecond  = 16000
@@ -128,7 +146,7 @@ def	sample(samplesStdin, convertorStdin, convertorStdout, counter, flacTmpFilena
 		while not speechToTextResponseQueue.empty():
 			processSpeechToTextResponse()
 
-		samples = samplesStdin.read(smallPerOfASecond)	#skip samples to reduce cpu usage during silent periods
+		samples = recorderStdin.read(smallPerOfASecond)	#skip samples to reduce cpu usage during silent periods
 		if not samples:
 			return -1				#Stop processing audio samples
 		sample      = samples[-bytesPerSample:]
@@ -144,7 +162,7 @@ def	sample(samplesStdin, convertorStdin, convertorStdout, counter, flacTmpFilena
 		while not speechToTextResponseQueue.empty():
 			processSpeechToTextResponse()
 
-		samples = samplesStdin.read(smallPerOfASecond)
+		samples = recorderStdin.read(smallPerOfASecond)
 		if not samples:
 			break	#process this (last) audio sample
 		sample = samples[:bytesPerSample]
@@ -195,12 +213,12 @@ def	sample(samplesStdin, convertorStdin, convertorStdout, counter, flacTmpFilena
 def	allSamples():
 	log('-- begin --')
 
-	if args.input == '-':
-		inputFd = stdin
-	elif args.input == 'arecord':
-		inputFd = Popen(inputUsingARecord, stdout=PIPE).stdout
-	elif args.input == 'test1':
-		inputFd = open('test/the sea change - ernest hemingway.raw', 'rb')
+	if args.recorder == '-':
+		recorderFd = stdin
+	elif args.recorder == 'arecord':
+		recorderFd = Popen(inputUsingARecord, stdout=PIPE).stdout
+	elif args.recorder == 'test1':
+		recorderFd = open('test/the sea change - ernest hemingway.raw', 'rb')
 
 	if args.convertor == 'flac':
 		convertor = convertorUsingFlac
@@ -214,12 +232,12 @@ def	allSamples():
 		#bufsize -1=system default bufsize, 0=no buffering
 		convertorProcess = Popen(convertor, bufsize=-1, stdin=PIPE, stdout=PIPE)
 
-		if args.output:
+		if args.outputsamples:
 			flacFilename = '/tmp/dictator-%04d.flac' % nRequests
 		else:
 			flacFilename = None
 
-		n = sample(inputFd, convertorProcess.stdin, convertorProcess.stdout, nRequests, flacFilename)
+		n = sample(recorderFd, convertorProcess.stdin, convertorProcess.stdout, nRequests, flacFilename)
 		if n < 0:
 			break
 
