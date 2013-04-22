@@ -6,10 +6,12 @@
 from sys import stdin, stdout
 from time import time, sleep
 from struct import unpack
-from Queue import PriorityQueue
+from os.path import isfile, isdir
+from os import mkdir, system
+from Queue import Queue
 from threading import Thread
-from subprocess import Popen, PIPE	#note: the pexpect module looks interesting also!
-from requests import post, adapters
+from subprocess import call, Popen, PIPE	#note: the pexpect module looks interesting also!
+from requests import get, post, adapters
 from json import loads
 
 
@@ -21,7 +23,7 @@ parser.add_argument('-l', '--log'      , help='output logging info for debuging 
 parser.add_argument('-v', '--verbose'  , help='output more text', action='store_true')
 
 recorderGroup = parser.add_argument_group('Recorder opions')
-recorderGroup.add_argument('-r', '--recorder', help='set recorder (input) method', choices=['-', 'arecord', 'test1'], default='arecord')
+recorderGroup.add_argument('-r', '--recorder', help='set recorder (input) method', choices=['arecord', '-', 'test1'], default='arecord')
 
 convertorGroup = parser.add_argument_group('Convertor options')
 #XXX +store input somewhere
@@ -29,30 +31,34 @@ convertorGroup.add_argument('-c', '--convertor', help='set raw input to flac con
 convertorGroup.add_argument('-os', '--outputsamples'   , help='output speech samples (to /tmp/)', action='store_true')
 
 sttGroup = parser.add_argument_group('Speech to text options')
+sttGroup.add_argument('-sttv', '--sttvoice'    , help='set voice', default='en-us')
 #XXX +speech to text translator (google)
 #XXX +speech to text minimal confidence (0.9 ??)
 #XXX +display repetitive unknown translations (boolean default=False)
 
 ttsGroup = parser.add_argument_group('Text to speech options')
-#XXX +text to speech translator (google)
-ttsGroup.add_argument('-tts', '--ttsconvertor', help='set text to speech method', default='google')
-ttsGroup.add_argument('-ttsv', '--ttsvoice'   , help='set voice for playback', default='en')
-ttsGroup.add_argument('-ttsp', '--ttsplay'    , help='set playback method', choices=['none', 'mplayer'], default='none')
+ttsGroup.add_argument('-tts' , '--texttospeech', help='enable text to speech', action='store_true')
+#XXX ttsGroup.add_argument('-ttsc', '--ttsconvertor', help='set text to speech method', default='google')
+ttsGroup.add_argument('-ttsv', '--ttsvoice'    , help='set playback voice', default='en-us')
+#XXX ttsGroup.add_argument('-ttsp', '--ttsplayer'   , help='set playback method', choices=['mplayer', 'espeaker'], default='mplayer')
 
 args = parser.parse_args()
 
 
 #work around issues...
 adapters.DEFAULT_RETRIES = 5	#prefends ConnectionErrors by urllib3 (used by requests)
+QUIT_TTS_THREAD = '!@#$'
 
 
 #Global data
 nSpeechToTextRequestsPending = 0
-speechToTextResponseQueue = PriorityQueue()
+speechToTextResponseQueue = Queue()
 
 speechToTextResponsesProcessed = 0
 speechToTextResponses = {}
 speechToTextLenFlacData = {}
+
+ttsQueue = Queue()
 
 
 #Helper functions
@@ -63,8 +69,11 @@ def log(s = ''):
 	return
 
 
-def	speechToText(counter, flacdata):
-	url     = 'http://www.google.com/speech-api/v1/recognize?lang=en-us&client=chromium'
+#
+#This runs in many seperate threads
+#
+def	speechToTextThread(counter, flacdata):
+	url     = 'http://www.google.com/speech-api/v1/recognize?lang=%s&client=chromium' % args.sttvoice
 	headers = {'Content-Type': 'audio/x-flac; rate=16000'}
 	files   = {'file': flacdata}
 
@@ -85,6 +94,9 @@ def	speechToText(counter, flacdata):
 	speechToTextResponseQueue.put( (counter, text) )
 
 
+#
+#
+#
 def	processSpeechToTextResponse():
 	global	nSpeechToTextRequestsPending, speechToTextResponsesProcessed
 
@@ -93,15 +105,61 @@ def	processSpeechToTextResponse():
 	nSpeechToTextRequestsPending -= 1
 
 	while speechToTextResponses.has_key(speechToTextResponsesProcessed):
+		s = speechToTextResponses[speechToTextResponsesProcessed]
 		if args.verbose:
-			print '%4d. %s' % (speechToTextResponsesProcessed, speechToTextResponses[speechToTextResponsesProcessed])
-			#print '%4d. (%6d samples) %s' % (speechToTextResponsesProcessed, speechToTextLenFlacData[speechToTextResponsesProcessed], speechToTextResponses[speechToTextResponsesProcessed])
+			print '%4d. %s' % (speechToTextResponsesProcessed, s)
+			#print '%4d. (%6d samples) %s' % (speechToTextResponsesProcessed, speechToTextLenFlacData[speechToTextResponsesProcessed], s)
 			stdout.flush()
 		else:
-			if speechToTextResponses[speechToTextResponsesProcessed]:
-				print '%s -' % (speechToTextResponses[speechToTextResponsesProcessed],),
-				stdout.flush()
+			print '%s -' % s,
+			stdout.flush()
+			#if s:
+			#	print '%s -' % s,
+			#	stdout.flush()
+
+		if args.texttospeech:
+			ttsQueue.put(s)
+
 		speechToTextResponsesProcessed += 1
+
+
+#
+#This runs in a seperate thread
+#
+def	textToSpeechThread():
+	while True:
+		text = ttsQueue.get(True)	#will block until something is available
+		if text == QUIT_TTS_THREAD:
+			break
+
+		flacDirname  = 'cache/%s' % args.ttsvoice
+		flacFilename = '%s/%s.flac' % (flacDirname, text)
+		if isfile(flacFilename):	#cached copy available
+			log('Use cached flac for "%s"' % text)
+
+			f = open(flacFilename, 'rb')
+			flac = f.read()
+			f.close()
+		else:
+			log('Download flac for "%s"' % text)
+
+			url  = 'http://translate.google.com/translate_tts?tl=%s&q=%s' % (args.ttsvoice, text)
+			r    = get(url)
+			flac = r.content
+
+			if not isdir(flacDirname):
+				mkdir(flacDirname)
+
+			f = open(flacFilename, 'wb')
+			f.write(r.content)
+			f.close()
+
+		cmd = 'mplayer -ao alsa -really-quiet -noconsolecontrols - < "%s" > /dev/null 2>&1' % flacFilename
+		log(cmd)
+		system(cmd)
+		#mplayer = Popen(cmd.split(), stdin=PIPE, stdout=PIPE, stderr=PIPE)
+		#mplayer.stdin.write(flac)
+		#mplayer.stdin.close()
 
 
 #
@@ -203,8 +261,8 @@ def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilen
 	global	nSpeechToTextRequestsPending
 	nSpeechToTextRequestsPending += 1
 	speechToTextLenFlacData[counter] = realNSamples
-	t = Thread(target=speechToText, args=(counter, flacFile))
-	t.start()
+
+	Thread(target = speechToTextThread, args = (counter, flacFile), name = 'speechToTextThread').start()
 
 	return 1
 
@@ -224,6 +282,9 @@ def	allSamples():
 		convertor = convertorUsingFlac
 	elif args.convertor == 'sox':
 		convertor = convertorUsingSox
+
+	if args.texttospeech:
+		Thread(target = textToSpeechThread, name = 'textToSpeechThread').start()
 
 	nRequests = 0
 	while True:
@@ -251,5 +312,10 @@ def	allSamples():
 
 
 if __name__ == '__main__':
-	allSamples()
+	try:
+		allSamples()
+	except KeyboardInterrupt:
+		pass
+
+	ttsQueue.put(QUIT_TTS_THREAD)	#Hack
 
