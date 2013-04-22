@@ -34,10 +34,11 @@ sttGroup = parser.add_argument_group('Speech to text options')
 sttGroup.add_argument('-sttv', '--sttvoice'    , help='set voice', default='en-us')
 #XXX +speech to text translator (google)
 #XXX +speech to text minimal confidence (0.9 ??)
+sttGroup.add_argument('-sttunknowns', '--sttshowunknowns', help='display unknowns texts', action='store_true')
 #XXX +display repetitive unknown translations (boolean default=False)
 
 ttsGroup = parser.add_argument_group('Text to speech options')
-ttsGroup.add_argument('-tts' , '--texttospeech', help='enable text to speech', action='store_true')
+ttsGroup.add_argument('-notts' , '--notexttospeech', help='disable text to speech', action='store_true', default=False)
 #XXX ttsGroup.add_argument('-ttsc', '--ttsconvertor', help='set text to speech method', default='google')
 ttsGroup.add_argument('-ttsv', '--ttsvoice'    , help='set playback voice', default='en-us')
 #XXX ttsGroup.add_argument('-ttsp', '--ttsplayer'   , help='set playback method', choices=['mplayer', 'espeaker'], default='mplayer')
@@ -48,6 +49,7 @@ args = parser.parse_args()
 #work around issues...
 adapters.DEFAULT_RETRIES = 5	#prefends ConnectionErrors by urllib3 (used by requests)
 QUIT_TTS_THREAD = '!@#$'
+STT_UNKNOWN     = u''
 
 
 #Global data
@@ -89,7 +91,7 @@ def	speechToTextThread(counter, flacdata):
 		text = j['hypotheses'][0]['utterance']	#note: perhaps only when 'confidence' is high
 		#print j
 	except ValueError:
-		text= u'...'
+		text = STT_UNKNOWN
 
 	speechToTextResponseQueue.put( (counter, text) )
 
@@ -106,19 +108,20 @@ def	processSpeechToTextResponse():
 
 	while speechToTextResponses.has_key(speechToTextResponsesProcessed):
 		s = speechToTextResponses[speechToTextResponsesProcessed]
-		if args.verbose:
-			print '%4d. %s' % (speechToTextResponsesProcessed, s)
-			#print '%4d. (%6d samples) %s' % (speechToTextResponsesProcessed, speechToTextLenFlacData[speechToTextResponsesProcessed], s)
-			stdout.flush()
-		else:
-			print '%s -' % s,
-			stdout.flush()
-			#if s:
-			#	print '%s -' % s,
-			#	stdout.flush()
+		if s != STT_UNKNOWN or args.sttshowunknowns:
+			if args.verbose:
+				print '%4d. %s' % (speechToTextResponsesProcessed, s)
+				#print '%4d. (%6d samples) %s' % (speechToTextResponsesProcessed, speechToTextLenFlacData[speechToTextResponsesProcessed], s)
+				stdout.flush()
+			else:
+				print '%s -' % s,
+				stdout.flush()
+				#if s:
+				#	print '%s -' % s,
+				#	stdout.flush()
 
-		if args.texttospeech:
-			ttsQueue.put(s)
+			if args.notexttospeech is False:
+				ttsQueue.put(s)
 
 		speechToTextResponsesProcessed += 1
 
@@ -283,7 +286,7 @@ def	allSamples():
 	elif args.convertor == 'sox':
 		convertor = convertorUsingSox
 
-	if args.texttospeech:
+	if args.notexttospeech is False:
 		Thread(target = textToSpeechThread, name = 'textToSpeechThread').start()
 
 	nRequests = 0
@@ -291,7 +294,7 @@ def	allSamples():
 		#XXX look into multithread the convertor process because using pipes doesn't seem to parallelize
 
 		#bufsize -1=system default bufsize, 0=no buffering
-		convertorProcess = Popen(convertor, bufsize=-1, stdin=PIPE, stdout=PIPE)
+		convertorProcess = Popen(convertor, bufsize=-1, stdin=PIPE, stdout=PIPE, stderr=PIPE)
 
 		if args.outputsamples:
 			flacFilename = '/tmp/dictator-%04d.flac' % nRequests
