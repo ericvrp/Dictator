@@ -9,6 +9,7 @@ from struct import unpack
 from os.path import isfile, isdir
 from os import mkdir, system
 from Queue import Queue
+from cStringIO import StringIO
 from threading import Thread
 from subprocess import call, Popen, PIPE	#note: the pexpect module looks interesting also!
 from requests import get, post, adapters
@@ -73,17 +74,42 @@ def log(s = ''):
 #
 #This runs in many seperate threads
 #
-def	speechToTextThread(counter, flacdata):
+def	speechToTextThread(counter, sampledata, flacFilename):
+
+	#
+	# 1. Convert the raw sample data to a flac file (requirement for the step 4)
+	#
+	if args.convertor == 'flac':
+		convertor = convertorUsingFlac
+	elif args.convertor == 'sox':
+		convertor = convertorUsingSox
+
+	#bufsize -1=system default bufsize, 0=no buffering
+	#convertorProcess = Popen(convertor, bufsize=-1, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+	convertorProcess = Popen(convertor, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+	convertorProcess.stdin.write(sampledata.read())
+	convertorProcess.stdin.close()
+	flacdata = convertorProcess.stdout.read()
+
+	sampledata.reset()
+	log('%d bytes of samples -> %d bytes of flac data' % (len(sampledata.read()), len(flacdata)))
+
+	#
+	# 2. Optionally save the flac file
+	#
+	if flacFilename:
+		log('Writting %s' % flacFilename)
+		f = open(flacFilename, 'wb')
+		f.write(flacdata)
+		f.close()
+
+	#
+	# 3. Convert the speech sample to text
+	#
 	url     = 'http://www.google.com/speech-api/v1/recognize?lang=%s&client=chromium' % args.sttvoice
 	headers = {'Content-Type': 'audio/x-flac; rate=16000'}
 	files   = {'file': flacdata}
-
-	r = post(url, files=files, headers=headers)
-	#print r.status_code
-	#print r.headers
-	#print r.content
-	#print r.text
-
+	r       = post(url, files=files, headers=headers)
 	try:
 		j    = loads(r.text)
 		assert len(j['hypotheses']) == 1
@@ -92,6 +118,9 @@ def	speechToTextThread(counter, flacdata):
 	except ValueError:
 		text = STT_UNKNOWN
 
+	#
+	# 4. put the resulting text in a queue for later processing (because these responses might return out of order)
+	#
 	speechToTextResponseQueue.put( (counter, text) )
 
 
@@ -190,16 +219,19 @@ convertorUsingSox = 'sox -t raw -c 1 -L -e signed -r 16k -b 16 - -t flac - gain 
 #	- let google handle translation
 #	- output translation text result
 #
-def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilename=None):
+def	sample(recorderStdin, counter, flacFilename):
 
 	bytesPerSample    = 2
 	samplesPerSecond  = 16000
-	silenceThreshold  = 500
+	silenceThreshold  = 600
 	maxSamples        = int(samplesPerSecond * 5)	#max seconds recording time (not too high to avoid deadlocks)
-	smallPerOfASecond = bytesPerSample * samplesPerSecond / 100
-	minSilentSamples  = int(samplesPerSecond * 0.5)	#duration of silence to seperate speech samples
+	smallPerOfASecond = bytesPerSample * samplesPerSecond / 50
+	silenceFadeInDuration = int(bytesPerSample * samplesPerSecond * 0.5)
+	minSilentSamples  = int(samplesPerSecond * 0.6)	#duration of silence to seperate speech samples
 	minSpeechSamples  = int(samplesPerSecond * 0.3)	#discard speech samples that are too short
 	nSamples          = 0
+	silenceFadeIn     = ''
+	sampledata        = StringIO()
 
 	log('Silence...')
 	while True:
@@ -212,14 +244,17 @@ def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilen
 		sample      = samples[-bytesPerSample:]
 
 		#XXX debugging why start of samples are recognized so bad
-		#convertorStdin.write(samples)
+		#sampledata.write(samples)
+
+		silenceFadeIn = silenceFadeIn[-silenceFadeInDuration:] + samples
 
 		sampleAsInt = unpack('<h', sample)[0]
 		if abs(sampleAsInt) >= silenceThreshold:	#end of silency detected
 			#XXX debugging why start of samples are recognized so bad
-			convertorStdin.write(samples)		#output because we don't know where the noise started
-§
-                	nSamples = len(samples) / bytesPerSample
+			#sampledata.write('\x00' * bytesPerSample * samplesPerSecond * 5)		#output because we don't know where the noise started
+			#sampledata.write(samples)		#output because we don't know where the noise started
+			sampledata.write(silenceFadeIn)
+			nSamples = len(samples) / bytesPerSample
 			break
 
 	log('Recording...')
@@ -242,7 +277,7 @@ def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilen
 				sampleAfterSilence = maxSamples
 
 		#XXX actually we do not need to write the final (silent) part. TODO: optimize this!
-		convertorStdin.write(samples)	#deadlocks after ~122Ksamples because convertor waits for all data
+		sampledata.write(samples)
 		nSamples += len(samples) / bytesPerSample
 
 		#log('%d samples' % nSamples)
@@ -250,27 +285,17 @@ def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilen
 	realNSamples = nSamples - minSilentSamples
 	log('Finished recording after %.1f seconds...' % (float(realNSamples) / samplesPerSecond,))
 
-	#read flacfile from convertorStdout (XXX better in above loop to avoid deadlock when convertorStdout gets full)
-	convertorStdin.close()
-
 	if realNSamples < minSpeechSamples:
 		log('Discard very short sample')
 		return 0
-
-	if flacTmpFilename:
-		log('Writting %s' % flacTmpFilename)
-		flacFile = convertorStdout.read()	#actually not to read the flacfile here
-		f = open(flacTmpFilename, 'wb')
-		f.write(flacFile)
-		f.close()
-	else:
-		flacFile = convertorStdout		#we avoid reading it early here
 
 	global	nSpeechToTextRequestsPending
 	nSpeechToTextRequestsPending += 1
 	speechToTextLenFlacData[counter] = realNSamples
 
-	Thread(target = speechToTextThread, args = (counter, flacFile), name = 'speechToTextThread').start()
+	sampledata.reset()
+	t = Thread(target = speechToTextThread, args = (counter, sampledata, flacFilename), name = 'speechToTextThread')
+	t.start()
 
 	return 1
 
@@ -286,27 +311,17 @@ def	allSamples():
 	elif args.recorder == 'test1':
 		recorderFd = open('test/the sea change - ernest hemingway.raw', 'rb')
 
-	if args.convertor == 'flac':
-		convertor = convertorUsingFlac
-	elif args.convertor == 'sox':
-		convertor = convertorUsingSox
-
 	if args.notexttospeech is False:
 		Thread(target = textToSpeechThread, name = 'textToSpeechThread').start()
 
 	nRequests = 0
 	while True:
-		#XXX look into multithread the convertor process because using pipes doesn't seem to parallelize
-
-		#bufsize -1=system default bufsize, 0=no buffering
-		convertorProcess = Popen(convertor, bufsize=-1, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-
 		if args.outputsamples:
 			flacFilename = '/tmp/dictator-%04d.flac' % nRequests
 		else:
 			flacFilename = None
 
-		n = sample(recorderFd, convertorProcess.stdin, convertorProcess.stdout, nRequests, flacFilename)
+		n = sample(recorderFd, nRequests, flacFilename)
 		if n < 0:
 			break
 
@@ -323,7 +338,9 @@ if __name__ == '__main__':
 	try:
 		allSamples()
 	except KeyboardInterrupt:
-		pass
+		while not ttsQueue.empty():	#cancel pending text to speech
+			ttsQueue.get()
 
+	#force tts Thread to exit quickly
 	ttsQueue.put(QUIT_TTS_THREAD)	#Hack
 
