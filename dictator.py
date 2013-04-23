@@ -32,16 +32,16 @@ convertorGroup.add_argument('-c', '--convertor', help='set raw input to flac con
 convertorGroup.add_argument('-os', '--outputsamples'   , help='output speech samples (to /tmp/)', action='store_true')
 
 sttGroup = parser.add_argument_group('Speech to text options')
-sttGroup.add_argument('-sttv', '--sttvoice'    , help='set voice', default='en')
-#XXX +speech to text translator (google)
-#XXX +speech to text minimal confidence (0.9 ??)
+sttGroup.add_argument('-sttv', '--sttvoice' , help='set voice' , default='en')
+sttGroup.add_argument('-stte', '--sttengine', help='set engine', choices=['google'], default='google')
+sttGroup.add_argument('-sttc', '--sttconfidence', help='set minimum confidence (default=0.8)', type=float, default=0.8)
 sttGroup.add_argument('-sttunknowns', '--sttshowunknowns', help='display unknowns texts', action='store_true')
 
 ttsGroup = parser.add_argument_group('Text to speech options')
 ttsGroup.add_argument('-notts' , '--notexttospeech', help='disable text to speech', action='store_true', default=False)
-#XXX ttsGroup.add_argument('-ttsc', '--ttsconvertor', help='set text to speech method', default='google')
+ttsGroup.add_argument('-ttsc', '--ttsengine', help='set text to speech method', choices=['google',], default='google')
 ttsGroup.add_argument('-ttsv', '--ttsvoice'    , help='set playback voice', default='en-us')
-#XXX ttsGroup.add_argument('-ttsp', '--ttsplayer'   , help='set playback method', choices=['mplayer', 'espeaker'], default='mplayer')
+ttsGroup.add_argument('-ttsp', '--ttsplayer'   , help='set playback method', choices=['mplayer',], default='mplayer')
 
 args = parser.parse_args()
 
@@ -49,7 +49,8 @@ args = parser.parse_args()
 #work around issues...
 adapters.DEFAULT_RETRIES = 5	#prefends ConnectionErrors by urllib3 (used by requests)
 QUIT_TTS_THREAD = '!@#$'
-STT_UNKNOWN     = u''
+STT_UNKNOWN     = u'?'
+LOW_CONFIDENCE_MARKER = '*'
 
 
 #Global data
@@ -106,17 +107,21 @@ def	speechToTextThread(counter, sampledata, flacFilename):
 	#
 	# 3. Convert the speech sample to text
 	#
-	url     = 'http://www.google.com/speech-api/v1/recognize?lang=%s&client=chromium' % args.sttvoice
-	headers = {'Content-Type': 'audio/x-flac; rate=16000'}
-	files   = {'file': flacdata}
-	r       = post(url, files=files, headers=headers)
-	try:
-		j    = loads(r.text)
-		assert len(j['hypotheses']) == 1
-		text = j['hypotheses'][0]['utterance']	#note: perhaps only when 'confidence' is high
-		#print j
-	except ValueError:
-		text = STT_UNKNOWN
+	if args.sttengine == 'google':
+		url     = 'http://www.google.com/speech-api/v1/recognize?lang=%s&client=chromium' % args.sttvoice
+		headers = {'Content-Type': 'audio/x-flac; rate=16000'}
+		files   = {'file': flacdata}
+		r       = post(url, files=files, headers=headers)
+		try:
+			j    = loads(r.text)
+			assert len(j['hypotheses']) == 1
+			confidence = float( j['hypotheses'][0]['confidence'] )
+			text = j['hypotheses'][0]['utterance']	#note: perhaps only when 'confidence' is high
+			if confidence < args.sttconfidence:
+				text = '%s%s%s %.2f' % (LOW_CONFIDENCE_MARKER, text, LOW_CONFIDENCE_MARKER, confidence)
+			#print j
+		except ValueError:
+			text = STT_UNKNOWN
 
 	#
 	# 4. put the resulting text in a queue for later processing (because these responses might return out of order)
@@ -149,6 +154,8 @@ def	processSpeechToTextResponse():
 				#	stdout.flush()
 
 			if args.notexttospeech is False:
+				if s[0] == LOW_CONFIDENCE_MARKER:
+					s = s.split(LOW_CONFIDENCE_MARKER)[1]
 				ttsQueue.put(s)
 
 		speechToTextResponsesProcessed += 1
