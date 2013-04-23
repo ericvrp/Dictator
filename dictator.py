@@ -31,7 +31,7 @@ convertorGroup.add_argument('-c', '--convertor', help='set raw input to flac con
 convertorGroup.add_argument('-os', '--outputsamples'   , help='output speech samples (to /tmp/)', action='store_true')
 
 sttGroup = parser.add_argument_group('Speech to text options')
-sttGroup.add_argument('-sttv', '--sttvoice'    , help='set voice', default='en-us')
+sttGroup.add_argument('-sttv', '--sttvoice'    , help='set voice', default='en')
 #XXX +speech to text translator (google)
 #XXX +speech to text minimal confidence (0.9 ??)
 sttGroup.add_argument('-sttunknowns', '--sttshowunknowns', help='display unknowns texts', action='store_true')
@@ -218,8 +218,7 @@ def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilen
 		if abs(sampleAsInt) >= silenceThreshold:	#end of silency detected
 			#XXX debugging why start of samples are recognized so bad
 			convertorStdin.write(samples)		#output because we don't know where the noise started
-§
-                	nSamples = len(samples) / bytesPerSample
+			nSamples = len(samples) / bytesPerSample
 			break
 
 	log('Recording...')
