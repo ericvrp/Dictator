@@ -35,7 +35,6 @@ sttGroup.add_argument('-sttv', '--sttvoice'    , help='set voice', default='en-u
 #XXX +speech to text translator (google)
 #XXX +speech to text minimal confidence (0.9 ??)
 sttGroup.add_argument('-sttunknowns', '--sttshowunknowns', help='display unknowns texts', action='store_true')
-#XXX +display repetitive unknown translations (boolean default=False)
 
 ttsGroup = parser.add_argument_group('Text to speech options')
 ttsGroup.add_argument('-notts' , '--notexttospeech', help='disable text to speech', action='store_true', default=False)
@@ -210,11 +209,16 @@ def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilen
 		samples = recorderStdin.read(smallPerOfASecond)	#skip samples to reduce cpu usage during silent periods
 		if not samples:
 			return -1				#Stop processing audio samples
-		convertorStdin.write(samples)			#XXX begin of sample better now?
 		sample      = samples[-bytesPerSample:]
+
+		#XXX debugging why start of samples are recognized so bad
+		#convertorStdin.write(samples)
+
 		sampleAsInt = unpack('<h', sample)[0]
 		if abs(sampleAsInt) >= silenceThreshold:	#end of silency detected
-			#XXX convertorStdin.write(samples)		#output because we don't know where the noise started
+			#XXX debugging why start of samples are recognized so bad
+			convertorStdin.write(samples)		#output because we don't know where the noise started
+§
                 	nSamples = len(samples) / bytesPerSample
 			break
 
