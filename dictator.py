@@ -50,7 +50,7 @@ args = parser.parse_args()
 adapters.DEFAULT_RETRIES = 5	#prefends ConnectionErrors by urllib3 (used by requests)
 QUIT_TTS_THREAD = '!@#$'
 STT_UNKNOWN     = u'?'
-LOW_CONFIDENCE_MARKER = '*'
+LOW_CONFIDENCE_MARKER = '?'
 
 
 #Global data
@@ -170,7 +170,7 @@ def	textToSpeechThread():
 		if text == QUIT_TTS_THREAD:
 			break
 
-		flacDirname  = 'cache/%s' % args.ttsvoice
+		flacDirname  = 'cache/%s/%s' % (args.ttsengine, args.ttsvoice)
 		flacFilename = '%s/%s.flac' % (flacDirname, text)
 		if isfile(flacFilename):	#cached copy available
 			log('Use cached flac for "%s"' % text)
@@ -181,19 +181,21 @@ def	textToSpeechThread():
 		else:
 			log('Download flac for "%s"' % text)
 
-			url  = 'http://translate.google.com/translate_tts?tl=%s&q=%s' % (args.ttsvoice, text)
+			if args.ttsengine == 'google':
+				url  = 'http://translate.google.com/translate_tts?tl=%s&q=%s' % (args.ttsvoice, text)
+
 			r    = get(url)
 			flac = r.content
 
 			if not isdir(flacDirname):
 				mkdir(flacDirname)
 
-			f = open(flacFilename, 'wb')
+			f = open(flacFilename, 'wb')	#Cache the newly downloaded translation
 			f.write(r.content)
 			f.close()
 
 		cmd = 'mplayer -ao alsa -really-quiet -noconsolecontrols - < "%s" > /dev/null 2>&1' % flacFilename
-		log(cmd)
+		#log(cmd)
 		system(cmd)
 		#mplayer = Popen(cmd.split(), stdin=PIPE, stdout=PIPE, stderr=PIPE)
 		#mplayer.stdin.write(flac)
