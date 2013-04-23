@@ -24,7 +24,7 @@ parser.add_argument('-l', '--log'      , help='output logging info for debuging 
 parser.add_argument('-v', '--verbose'  , help='output more text', action='store_true')
 
 recorderGroup = parser.add_argument_group('Recorder opions')
-recorderGroup.add_argument('-r', '--recorder', help='set recorder (input) method', choices=['arecord', '-', 'test1'], default='arecord')
+recorderGroup.add_argument('-r', '--recorder', help='set recorder (input) method', choices=['arecord', '-', 'test1', 'frequent'], default='arecord')
 
 convertorGroup = parser.add_argument_group('Convertor options')
 #XXX +store input somewhere
@@ -302,15 +302,18 @@ def	sample(recorderStdin, counter, flacFilename):
 def	allSamples():
 	log('-- begin --')
 
+	if args.notexttospeech is False:
+		Thread(target = textToSpeechThread, name = 'textToSpeechThread').start()
+
 	if args.recorder == '-':
 		recorderFd = stdin
 	elif args.recorder == 'arecord':
 		recorderFd = Popen(inputUsingARecord, stdout=PIPE).stdout
 	elif args.recorder == 'test1':
 		recorderFd = open('test/the sea change - ernest hemingway.raw', 'rb')
-
-	if args.notexttospeech is False:
-		Thread(target = textToSpeechThread, name = 'textToSpeechThread').start()
+	elif args.recorder == 'frequent':
+		populateCacheWithFrequentWords()
+		return
 
 	nRequests = 0
 	while True:
@@ -325,11 +328,24 @@ def	allSamples():
 
 		nRequests += n
 
+	waitForFinalRequestsToBeProcessed()
+	log('-- end --')
+
+
+def	waitForFinalRequestsToBeProcessed():
 	log('Waiting for final requests to be processed...')
 	while nSpeechToTextRequestsPending > 0:
 		processSpeechToTextResponse()
 
-	log('-- end --')
+
+def	populateCacheWithFrequentWords():
+	for i in range(100):
+		ttsQueue.put( str(i) )
+
+	for p in range(2, 10):
+		for n in range(1, 10):
+			i = n * 10 ** p
+		        ttsQueue.put( str(i) )
 
 
 if __name__ == '__main__':
