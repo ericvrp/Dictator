@@ -210,10 +210,11 @@ def	sample(recorderStdin, convertorStdin, convertorStdout, counter, flacTmpFilen
 		samples = recorderStdin.read(smallPerOfASecond)	#skip samples to reduce cpu usage during silent periods
 		if not samples:
 			return -1				#Stop processing audio samples
+		convertorStdin.write(samples)			#XXX begin of sample better now?
 		sample      = samples[-bytesPerSample:]
 		sampleAsInt = unpack('<h', sample)[0]
 		if abs(sampleAsInt) >= silenceThreshold:	#end of silency detected
-                	convertorStdin.write(samples)		#output because we don't know where the noise started
+			#XXX convertorStdin.write(samples)		#output because we don't know where the noise started
                 	nSamples = len(samples) / bytesPerSample
 			break
 
